@@ -1,6 +1,13 @@
 defmodule Csvala do
   @moduledoc """
-  Documentation for `Csvala`.
+  Csvala is a CSV parser that specifically looks for duplicate records
+  based on email, phone number, or either. The main entry point for the program
+  is the parse/2 function, which accepts a file path and a configuration string,
+  which can be "e" for email, "p" for phone, or "ep" for either.
+
+  ##Example
+    iex> Csvala.parse("my_csv_file.csv", "e)
+    :ok
   """
   @spec parse(Path.t(), String.t()) :: :ok | :error
   def parse(path, arguments) do
@@ -20,26 +27,12 @@ defmodule Csvala do
   end
 
   @spec do_parse(File.Stream.t(), Path.t(), String.t()) :: :ok
-  defp do_parse(input_file, path, arguments) do
+  def do_parse(input_file, path, arguments) do
     input_file
     |> Stream.map(&String.split(&1, ",", trim: false))
-    |> Stream.map(&add_config(&1, arguments))
     |> Stream.map(&mark_outliers(&1))
-    |> Stream.uniq_by(fn
-      {[_first, _last, email, _phone], {true, _do_phone?}, false} ->
-        email
-
-      {_value, _config, _outlier} ->
-        nil
-    end)
-    |> Stream.uniq_by(fn
-      {[_first, _last, _email, phone], {_do_email?, true}, false} ->
-        phone
-
-      {_value, _config, _outlier} ->
-        nil
-    end)
-    |> Stream.map(&remove_configs_and_outlier_marks(&1))
+    |> unique_by_email_or_phone(arguments)
+    |> Stream.map(&remove_outlier_marks(&1))
     |> Stream.map(&format_for_csv(&1))
     |> Stream.into(File.stream!(output_path(path, arguments)))
     |> Stream.run()
@@ -47,57 +40,43 @@ defmodule Csvala do
     :ok
   end
 
-  @spec add_config(list(String.t()), String.t()) :: {list(String.t()), tuple()}
-  defp add_config(value, arguments) do
-    {
-      value,
-      make_config(arguments)
-    }
+  @spec unique_by_email_or_phone(Enumerable.t(), String.t()) :: Enumerable.t()
+  defp unique_by_email_or_phone(stream, arguments) do
+    case arguments do
+      "e" ->
+        stream |> Stream.uniq_by(&unique_by_email(&1))
+
+      "p" ->
+        stream |> Stream.uniq_by(&unique_by_phone(&1))
+
+      "ep" ->
+        stream |> Stream.uniq_by(&unique_by_email(&1)) |> Stream.uniq_by(&unique_by_phone(&1))
+    end
   end
 
-  @spec remove_configs_and_outlier_marks({list(String.t()), {boolean(), boolean()}, boolean()}) ::
+  @spec unique_by_phone({list(String.t()), boolean()}) :: String.t() | nil
+  defp unique_by_phone({[_first, _last, _email, phone], false}), do: phone
+  defp unique_by_phone({_value, _outlier}), do: false
+
+  @spec unique_by_email({list(String.t()), boolean()}) :: String.t() | nil
+  defp unique_by_email({[_first, _last, email, _phone], false}), do: email
+  defp unique_by_email({_value, _outlier}), do: nil
+
+  @spec remove_outlier_marks({list(String.t()), boolean()}) ::
           list(String.t())
-  defp remove_configs_and_outlier_marks({value, _config, _outlier}), do: value
+  defp remove_outlier_marks({value, _outlier}), do: value
 
   @spec output_path(Path.t(), String.t()) :: Path.t()
   defp output_path(path, arguments) do
-    Path.basename(path, ".csv") <> "_deduplicated_by_#{arguments}.csv"
+    Path.join([Path.dirname(path), Path.basename(path, ".csv")]) <>
+      "_deduplicated_by_#{arguments}.csv"
   end
 
-  @spec make_config(String.t()) :: {boolean(), boolean()}
-  defp make_config("e") do
-    {true, false}
-  end
-
-  defp make_config("ep") do
-    {true, true}
-  end
-
-  defp make_config("p") do
-    {false, true}
-  end
-
-  defp make_config(_) do
-    :error
-  end
-
-  @spec mark_outliers({list(String.t()), {boolean(), boolean()}}) ::
-          {list(String.t()), {boolean(), boolean()}, boolean()}
-  defp mark_outliers({value = [_first, _last, "", _phone], config = {true, _do_phone?}}) do
-    {value, config, true}
-  end
-
-  defp mark_outliers({value = [_first, _last, _email, ""], config = {_do_email?, true}}) do
-    {value, config, true}
-  end
-
-  defp mark_outliers({value = [_first, _last, _email, _phone], config}) do
-    {value, config, false}
-  end
-
-  defp mark_outliers({value, config}) do
-    {value, config, true}
-  end
+  @spec mark_outliers({list(String.t())}) :: {list(String.t()), boolean()}
+  defp mark_outliers(value = [_first, _last, "", _phone]), do: {value, true}
+  defp mark_outliers(value = [_first, _last, _email, ""]), do: {value, true}
+  defp mark_outliers(value = [_first, _last, _email, _phone]), do: {value, false}
+  defp mark_outliers(value), do: {value, true}
 
   @spec format_for_csv(list(String.t())) :: String.t()
   defp format_for_csv([last, first, email, phone]) do
