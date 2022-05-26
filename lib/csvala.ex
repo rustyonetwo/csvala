@@ -6,7 +6,7 @@ defmodule Csvala do
   which can be "e" for email, "p" for phone, or "ep" for either.
 
   ##Example
-    iex> Csvala.parse("my_csv_file.csv", "e)
+    iex> Csvala.parse("sample_100.csv", "e")
     :ok
   """
   @spec parse(Path.t(), String.t()) :: :ok | :error
